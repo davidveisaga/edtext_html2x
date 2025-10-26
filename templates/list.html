@@ -1,0 +1,22 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Documentos guardados</title>
+</head>
+<body>
+    <nav>
+        <a href="/">Nuevo documento</a> |
+        <a href="/explorer">Explorar documentos</a>
+    </nav>
+    <h2>Documentos HTML guardados</h2>
+    <ul>
+      {% for file in files %}
+        <li>
+          {{ file.replace('.html', '') }}
+          [<a href="/edit/{{ file }}">Editar</a>]
+          [<a href="/documents/{{ file.replace('.html', '.odt') }}">Descargar ODT</a>]
+        </li>
+      {% endfor %}
+    </ul>
+</body>
+</html>

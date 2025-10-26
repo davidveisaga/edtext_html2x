@@ -1,0 +1,26 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Explorador de documentos</title>
+</head>
+<body>
+    <nav>
+        <a href="/">Nuevo documento</a> |
+        <a href="/explorer">Explorar documentos</a>
+    </nav>
+    <h2>Explorador de documentos</h2>
+    <ul>
+      {% for name, formats in grouped.items() %}
+        <li>
+          {{ name }}
+          {% if 'html' in formats %}
+            [<a href="/edit/{{ name }}.html">Editar</a>]
+          {% endif %}
+          {% for ext in formats %}
+            [<a href="/documents/{{ name }}.{{ ext }}">Descargar {{ ext.upper() }}</a>]
+          {% endfor %}
+        </li>
+      {% endfor %}
+    </ul>
+</body>
+</html>

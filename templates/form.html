@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Editor ODT</title>
+    <script src="https://cdn.jsdelivr.net/npm/tinymce@6.8.2/tinymce.min.js"></script>
+    <script>
+      tinymce.init({
+        selector: '#editor',
+        plugins: 'image link code lists',
+        toolbar: 'undo redo | bold italic underline | forecolor backcolor | alignleft aligncenter alignright | image link | code',
+        menubar: false
+      });
+    </script>
+    <style>
+      #toast {
+        visibility: hidden;
+        min-width: 250px;
+        background-color: #4CAF50;
+        color: white;
+        text-align: center;
+        border-radius: 5px;
+        padding: 16px;
+        position: fixed;
+        z-index: 1;
+        right: 30px;
+        bottom: 30px;
+        font-size: 17px;
+      }
+
+      #toast.show {
+        visibility: visible;
+        animation: fadein 0.5s, fadeout 0.5s 2.5s;
+      }
+
+      @keyframes fadein {
+        from { bottom: 0; opacity: 0; }
+        to { bottom: 30px; opacity: 1; }
+      }
+
+      @keyframes fadeout {
+        from { bottom: 30px; opacity: 1; }
+        to { bottom: 0; opacity: 0; }
+      }
+    </style>
+</head>
+<body>
+    <nav>
+        <a href="/">Nuevo documento</a> |
+        <a href="/explorer">Explorar documentos</a>
+    </nav>
+
+    {% with messages = get_flashed_messages() %}
+      {% if messages %}
+        <div id="toast">{{ messages[0] }}</div>
+      {% else %}
+        <div id="toast"></div>
+      {% endif %}
+    {% endwith %}
+
+    <h1>Editor de documentos ODT</h1>
+    <form action="/generate" method="post">
+        <label for="docname">Nombre del documento:</label>
+        <input type="text" id="docname" name="docname" value="{{ filename.replace('.html', '') if filename else '' }}" required><br><br>
+        <input type="hidden" name="filename" value="{{ filename or '' }}">
+        <textarea id="editor" name="content" rows="20" cols="80">{{ content or '' }}</textarea><br>
+        <button type="submit">Guardar</button>
+    </form>
+
+    <script>
+      window.onload = function() {
+        var toast = document.getElementById("toast");
+        if (toast.textContent.trim() !== "") {
+          toast.className = "show";
+          setTimeout(function(){ toast.className = toast.className.replace("show", ""); }, 3000);
+        }
+      };
+    </script>
+</body>
+</html>
