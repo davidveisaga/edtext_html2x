@@ -1,1 +1,8 @@
 Flask==3.0.0
+# Conversion libraries (pure-Python implementations)
+html2docx==1.6.0
+PyMuPDF==1.23.8
+python-docx==0.8.11
+odfpy==1.4.1
+beautifulsoup4==4.12.2
+lxml==5.1.0  # Para parsear HTML de forma más robusta

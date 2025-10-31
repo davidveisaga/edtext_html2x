@@ -8,7 +8,58 @@
         selector: '#editor',
         plugins: 'image link code lists',
         toolbar: 'undo redo | bold italic underline | forecolor backcolor | alignleft aligncenter alignright | image link | code',
-        menubar: false
+        menubar: false,
+        statusbar: false,
+        content_css: false,
+        verify_html: false,
+        extended_valid_elements: '*[*]',
+        content_style: `
+          body { 
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif; 
+          }
+          [style*="background-color"] { 
+            background-color: attr(style); 
+            padding: 2px;
+          }
+        `,
+        style_formats: [
+          {title: 'Highlight Yellow', inline: 'span', styles: {'background-color': '#ffff00'}},
+          {title: 'Highlight Green', inline: 'span', styles: {'background-color': '#00ff00'}},
+          {title: 'Highlight Blue', inline: 'span', styles: {'background-color': '#00ffff'}},
+          {title: 'Highlight Red', inline: 'span', styles: {'background-color': '#ff0000'}}
+        ],
+        formats: {
+          highlight: {
+            inline: 'span',
+            classes: 'highlight',
+            styles: {'background-color': '%value'}
+          }
+        },
+        setup: function(ed) {
+          editor = ed;
+        },
+        init_instance_callback: function(ed) {
+          // Registrar formatos personalizados
+          ed.formatter.register('highlight', {
+            inline: 'span',
+            styles: {'background-color': '%value'}
+          });
+        },
+        // Configuración de colores
+        color_picker_callback: function(callback, value) {
+          callback('#ffff00');  // Amarillo por defecto
+        },
+        // Preservar estilos
+        paste_retain_style_properties: 'all',
+        paste_remove_styles: false,
+        paste_remove_styles_if_webkit: false,
+        paste_webkit_styles: 'all',
+        valid_styles: {
+          '*': 'background-color,color,font-weight,font-style,text-decoration'
+        },
+        // Evitar que TinyMCE limpie los estilos
+        valid_elements: '*[*]',
+        valid_children: '+*[*]'
       });
     </script>
     <style>
@@ -58,21 +109,54 @@
     {% endwith %}
 
     <h1>Editor de documentos ODT</h1>
-    <form action="/generate" method="post">
+    <form id="editorForm" action="/generate" method="post">
         <label for="docname">Nombre del documento:</label>
         <input type="text" id="docname" name="docname" value="{{ filename.replace('.html', '') if filename else '' }}" required><br><br>
         <input type="hidden" name="filename" value="{{ filename or '' }}">
         <textarea id="editor" name="content" rows="20" cols="80">{{ content or '' }}</textarea><br>
-        <button type="submit">Guardar</button>
+        <button type="button" onclick="submitForm()">Guardar</button>
     </form>
 
     <script>
+      let editor;
+      
       window.onload = function() {
         var toast = document.getElementById("toast");
         if (toast.textContent.trim() !== "") {
           toast.className = "show";
           setTimeout(function(){ toast.className = toast.className.replace("show", ""); }, 3000);
         }
+      };
+
+      function submitForm() {
+        // Obtener el contenido del editor
+        const content = editor.getContent();
+        
+        // Hacer la petición usando fetch
+        const formData = new FormData(document.getElementById('editorForm'));
+        formData.set('content', content);  // Asegurar que usamos el contenido del editor
+        
+        fetch('/generate', {
+          method: 'POST',
+          body: formData
+        })
+        .then(response => response.text())
+        .then(html => {
+          // Actualizar el toast con el mensaje de respuesta
+          const parser = new DOMParser();
+          const doc = parser.parseFromString(html, 'text/html');
+          const toastContent = doc.getElementById('toast').textContent;
+          if (toastContent) {
+            const toast = document.getElementById('toast');
+            toast.textContent = toastContent;
+            toast.className = "show";
+            setTimeout(function(){ toast.className = toast.className.replace("show", ""); }, 3000);
+          }
+        })
+        .catch(error => {
+          console.error('Error:', error);
+          alert('Error al guardar el documento');
+        });
       };
     </script>
 </body>
