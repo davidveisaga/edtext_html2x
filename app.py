@@ -237,6 +237,55 @@ def _set_docx_run_shading(run, hex_color):
         print(f"Failed to set docx shading for {hex_color}: {e}")
 
 
+def _extract_and_save_inline_images(html, upload_folder='static/uploads'):
+    """Busca <img src="data:...base64..."> en el HTML, guarda cada imagen
+    en disk bajo `upload_folder` y reemplaza el src por la ruta estática.
+
+    Retorna el HTML modificado.
+    """
+    import base64
+    import uuid
+    from bs4 import BeautifulSoup
+    import re
+
+    soup = BeautifulSoup(html, 'lxml')
+    os.makedirs(upload_folder, exist_ok=True)
+
+    for img in soup.find_all('img'):
+        src = img.get('src', '')
+        if not src:
+            continue
+        # detect data URI
+        if src.startswith('data:'):
+            m = re.match(r'data:(image/[^;]+);base64,(.*)', src, re.S)
+            if not m:
+                continue
+            mime = m.group(1)
+            data = m.group(2)
+            # choose extension from mime
+            ext = 'png'
+            if mime == 'image/jpeg' or mime == 'image/jpg':
+                ext = 'jpg'
+            elif mime == 'image/gif':
+                ext = 'gif'
+            elif mime == 'image/svg+xml':
+                ext = 'svg'
+
+            filename = f"{uuid.uuid4().hex}.{ext}"
+            filepath = os.path.join(upload_folder, filename)
+            try:
+                with open(filepath, 'wb') as fh:
+                    fh.write(base64.b64decode(data))
+                # set the img src to the static path so Flask can serve it
+                # e.g. /static/uploads/<filename>
+                img['src'] = f"/static/uploads/{filename}"
+                print(f"Saved inline image to {filepath}")
+            except Exception as e:
+                print(f"Failed to save inline image: {e}")
+
+    return str(soup)
+
+
 def html_to_docx(html, out_path):
     """Convert HTML to DOCX preserving highlights and formatting"""
     from bs4 import BeautifulSoup
@@ -300,6 +349,28 @@ def html_to_docx(html, out_path):
                 parent_paragraph.add_run(text)
             return
                 
+        # Procesar imágenes embebidas
+        if node.name == 'img':
+            src = node.get('src', '')
+            if src:
+                # Convertir ruta de URL estática a ruta de archivo local
+                file_path = src.lstrip('/')
+                if not os.path.isabs(file_path):
+                    file_path = os.path.join(os.getcwd(), file_path)
+                try:
+                    # Intentar insertar la imagen en el párrafo (inline)
+                    try:
+                        run = parent_paragraph.add_run()
+                        run.add_picture(file_path)
+                    except Exception:
+                        # Fallback: añadir imagen como párrafo independiente
+                        doc.add_picture(file_path)
+                except Exception as e:
+                    print(f"Failed to add image to DOCX from {file_path}: {e}")
+            return
+
+        
+
         # Procesar elementos con formato
         if node.name in ('span', 'mark', 'strong', 'b', 'em', 'i', 'u'):
             text = node.get_text()  # No usar strip() para preservar espacios
@@ -348,6 +419,23 @@ def html_to_docx(html, out_path):
                     print(f"Trying data-mce-style: {mce_style}")
                     node_with_mce = type('Node', (), {'get': lambda s, x: mce_style if x == 'style' else None})()
                     apply_text_formatting(run, node_with_mce)
+            return
+        
+        # Procesar imágenes en elementos inline dentro de bloques (por si aparecen como hijos)
+        if node.name == 'img':
+            src = node.get('src', '')
+            if src:
+                file_path = src.lstrip('/')
+                if not os.path.isabs(file_path):
+                    file_path = os.path.join(os.getcwd(), file_path)
+                try:
+                    try:
+                        run = parent_paragraph.add_run()
+                        run.add_picture(file_path)
+                    except Exception:
+                        doc.add_picture(file_path)
+                except Exception as e:
+                    print(f"Failed to add nested image to DOCX from {file_path}: {e}")
             return
             
         # Procesar otros elementos de forma recursiva
@@ -476,6 +564,40 @@ def html_to_odt(html, out_path):
                 parent_paragraph.addText(text)
             return
                 
+        # Procesar imágenes embebidas en ODT
+        if node.name == 'img':
+            src = node.get('src', '')
+            if src:
+                file_path = src.lstrip('/')
+                if not os.path.isabs(file_path):
+                    file_path = os.path.join(os.getcwd(), file_path)
+                try:
+                    from odf.draw import Frame, Image
+                    import mimetypes
+                    with open(file_path, 'rb') as fimg:
+                        content = fimg.read()
+                    mediatype, _ = mimetypes.guess_type(file_path)
+                    if mediatype is None:
+                        mediatype = 'application/octet-stream'
+                    try:
+                        manifestfn = doc.addPictureFromString(content, mediatype)
+                        href = manifestfn
+                    except Exception as e:
+                        print(f"addPictureFromString failed for ODT: {e}, trying addPictureFromFile")
+                        try:
+                            manifestfn = doc.addPictureFromFile(file_path)
+                            href = manifestfn
+                        except Exception as e2:
+                            print(f"addPictureFromFile also failed: {e2}")
+                            href = file_path
+                    frame = Frame(width="6cm", height="4cm")
+                    image = Image(href=href)
+                    frame.addElement(image)
+                    parent_paragraph.addElement(frame)
+                except Exception as e:
+                    print(f"Failed to add image to ODT from {file_path}: {e}")
+            return
+
         # Procesar elementos con formato
         if node.name in ('span', 'mark', 'strong', 'b', 'em', 'i', 'u'):
             text = node.get_text()  # No usar strip() para preservar espacios
@@ -586,6 +708,14 @@ def generate():
     html_path = os.path.join(UPLOAD_FOLDER, filename)
     odt_path = html_path.replace('.html', '.odt')
     docx_path = html_path.replace('.html', '.docx')
+
+    # Extract any inline (data URI) images pasted from the editor and save
+    # them to the static uploads folder, replacing the <img> src attributes
+    # with the corresponding `/static/uploads/...` paths.
+    try:
+        content = _extract_and_save_inline_images(content)
+    except Exception as e:
+        print(f"Warning: failed to extract inline images: {e}")
 
     with open(html_path, 'w', encoding='utf-8') as f:
         f.write(content)
