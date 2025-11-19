@@ -1,0 +1,17 @@
+<html><body><p>Archivo octavo. </p>
+<p><img data-local-src="../static/uploads/451e536624d54c01b96211a77f62da7a.png" src="/api/images/451e536624d54c01b96211a77f62da7a.png"/></p>
+<p><img alt="" data-local-src="../static/uploads/a082e13118bd4dbf818e6627b5b18855.jpg" height="141" src="/api/images/a082e13118bd4dbf818e6627b5b18855.jpg" width="82"/></p>
+<p>el ocho esta embevido y el uno es un archivo remoto</p>
+<!-- FILE_VIEW_FALLBACK_SCRIPT -->
+<p>
+<script>
+(function(){
+  try{
+    if (location.protocol === 'file:'){
+      Array.prototype.forEach.call(document.querySelectorAll('img[data-local-src]'), function(img){
+        var local = img.getAttribute('data-local-src'); if(local) img.src = local; });
+    }
+  }catch(e){}
+})();
+</script>
+</p></body></html>

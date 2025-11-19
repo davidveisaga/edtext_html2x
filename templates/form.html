@@ -62,6 +62,19 @@
         valid_children: '+*[*]'
       });
     </script>
+    <script>
+      // If this HTML is opened directly via file://, API URLs won't work.
+      // Replace <img> src with data-local-src when viewing via file protocol.
+      (function(){
+        if (window.location.protocol === 'file:') {
+          document.addEventListener('DOMContentLoaded', function(){
+            document.querySelectorAll('img[data-local-src]').forEach(function(img){
+              try { img.src = img.getAttribute('data-local-src'); } catch(e){}
+            });
+          });
+        }
+      })();
+    </script>
     <style>
       #toast {
         visibility: hidden;
@@ -113,7 +126,7 @@
         <label for="docname">Nombre del documento:</label>
         <input type="text" id="docname" name="docname" value="{{ filename.replace('.html', '') if filename else '' }}" required><br><br>
         <input type="hidden" name="filename" value="{{ filename or '' }}">
-        <textarea id="editor" name="content" rows="20" cols="80">{{ content or '' }}</textarea><br>
+      <textarea id="editor" name="content" rows="20" cols="80">{{ content|safe if content else '' }}</textarea><br>
         <button type="button" onclick="submitForm()">Guardar</button>
     </form>
 

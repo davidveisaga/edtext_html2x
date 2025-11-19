@@ -16,7 +16,7 @@ with open(BASE, 'r', encoding='utf-8') as f:
     html = f.read()
 
 print('Running html_to_odt to generate', OUT)
-html_to_odt(html, OUT)
+html_to_odt(html, OUT, base_dir=os.path.dirname(BASE))
 print('Done conversion. Now inspect generated file...')
 
 # reuse inspect_odt

@@ -1,7 +1,9 @@
 from flask import Flask, render_template, request, send_file, redirect, url_for, flash
+from flask import send_from_directory
 import os
 from werkzeug.utils import secure_filename
 import re
+import uuid
 
 # Color mappings for highlights
 _colors = {
@@ -19,6 +21,8 @@ app = Flask(__name__)
 app.secret_key = 'supersecretkey'
 UPLOAD_FOLDER = 'documents'
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
+IMAGES_FOLDER = os.path.join('static', 'uploads')
+os.makedirs(IMAGES_FOLDER, exist_ok=True)
 
 # Toggle whether to set Word's limited highlight index (WD_COLOR_INDEX).
 # When False we rely only on run shading (w:shd) to preserve exact hex colors
@@ -276,17 +280,243 @@ def _extract_and_save_inline_images(html, upload_folder='static/uploads'):
             try:
                 with open(filepath, 'wb') as fh:
                     fh.write(base64.b64decode(data))
-                # set the img src to the static path so Flask can serve it
-                # e.g. /static/uploads/<filename>
-                img['src'] = f"/static/uploads/{filename}"
+                # set the img src to a relative static path so the saved HTML
+                # works both when served by Flask and when opened directly
+                # from disk. From `documents/` the correct relative path to
+                # the `static/uploads` folder is `../static/uploads/...`.
+                api_url = None
+                try:
+                    api_url = url_for('serve_image', filename=filename)
+                    img['src'] = api_url
+                    img['data-local-src'] = f"../{upload_folder}/{filename}"
+                    print(f"Inline image saved and src rewritten to API: {img['src']}")
+                except Exception:
+                    # fallback to relative static path if url_for isn't available
+                    rel = f"../{upload_folder}/{filename}"
+                    img['src'] = rel
+                    img['data-local-src'] = rel
+                    print(f"Inline image saved and src set to relative path: {img['src']}")
                 print(f"Saved inline image to {filepath}")
             except Exception as e:
                 print(f"Failed to save inline image: {e}")
 
     return str(soup)
 
+def _convert_local_srcs_to_api(html):
+    """Rewrite local image srcs that point to the uploads folder to use
+    the `/api/images/<filename>` endpoint so they behave like remote URLs.
+    Handles paths like `../static/uploads/<file>`, `/static/uploads/<file>`,
+    `../api/images/<file>`, `/api/images/<file>`, and `file://.../static/uploads/<file>`.
+    """
+    try:
+        from bs4 import BeautifulSoup
+    except Exception:
+        return html
 
-def html_to_docx(html, out_path):
+    soup = BeautifulSoup(html, 'lxml')
+    for img in soup.find_all('img'):
+        src = img.get('src', '')
+        if not src:
+            continue
+        # find filename after static/uploads/
+        m = re.search(r'static/uploads/([^"\'>]+)', src)
+        if m:
+            filename = m.group(1)
+            try:
+                api_url = url_for('serve_image', filename=filename)
+                img['src'] = api_url
+                img['data-local-src'] = f"../static/uploads/{filename}"
+                print(f"Rewrote local src {src} -> {img['src']}")
+            except Exception:
+                img['src'] = f"/api/images/{filename}"
+                img['data-local-src'] = f"../static/uploads/{filename}"
+                print(f"Rewrote local src {src} -> {img['src']} (fallback)")
+            continue
+
+        # find filename after api/images/ (may be relative like ../api/images/...)
+        m2 = re.search(r'api/images/([^"\'>\\]+)', src)
+        if m2:
+            filename = m2.group(1)
+            try:
+                api_url = url_for('serve_image', filename=filename)
+                img['src'] = api_url
+                img['data-local-src'] = f"../static/uploads/{filename}"
+                print(f"Rewrote api/images src {src} -> {img['src']}")
+            except Exception:
+                img['src'] = f"/api/images/{filename}"
+                img['data-local-src'] = f"../static/uploads/{filename}"
+                print(f"Rewrote api/images src {src} -> {img['src']} (fallback)")
+            continue
+
+    return str(soup)
+
+@app.route('/api/images/<path:filename>')
+def serve_image(filename):
+    """Serve images stored in `static/uploads` via a simple API route.
+
+    Using `send_from_directory` allows us to keep images outside the
+    application's document tree and reference them via `/api/images/...`.
+    """
+    # Security: prevent path traversal
+    filename = os.path.normpath(filename)
+    if filename.startswith('..'):
+        return "Invalid filename", 400
+    return send_from_directory(IMAGES_FOLDER, filename)
+def _resolve_image_src_to_path(src, base_dir=None):
+    """Resolve an <img> src to a filesystem path.
+
+    - If `src` is an absolute web-root path like `/static/uploads/...`, resolve
+      it relative to the project root (`os.getcwd()`).
+    - If `src` is a file:// URL, strip the scheme and return the path.
+    - Otherwise treat `src` as relative to `base_dir` (if provided) or the
+      current working directory.
+    Returns a normalized filesystem path (may not exist).
+    """
+    if not src:
+        return None
+    src = src.strip()
+    # file:// URL
+    if src.startswith('file://'):
+        path = src[len('file://'):]
+        return os.path.normpath(path)
+    # http(s) - try to download into IMAGES_FOLDER so we can embed it
+    if src.startswith('http://') or src.startswith('https://'):
+        try:
+            import urllib.request
+            import mimetypes
+            # fetch bytes
+            with urllib.request.urlopen(src) as resp:
+                data = resp.read()
+                info = resp.info()
+                ctype = info.get_content_type() if hasattr(info, 'get_content_type') else None
+
+            # choose extension
+            ext = None
+            if ctype:
+                ext = mimetypes.guess_extension(ctype)
+            if not ext:
+                # try imghdr
+                try:
+                    import imghdr
+                    ext = imghdr.what(None, h=data)
+                    if ext:
+                        ext = '.' + ext
+                except Exception:
+                    ext = '.bin'
+
+            if not os.path.exists(IMAGES_FOLDER):
+                os.makedirs(IMAGES_FOLDER, exist_ok=True)
+            fname = f"{uuid.uuid4().hex}{ext}"
+            fpath = os.path.join(IMAGES_FOLDER, fname)
+            with open(fpath, 'wb') as fh:
+                fh.write(data)
+            return os.path.normpath(fpath)
+        except Exception as e:
+            print(f"Failed to download remote image {src}: {e}")
+            return None
+    # absolute web-root path: /static/...
+    # If the src contains our API route (e.g. '/api/images/...' or '../api/images/...')
+    m_api = re.search(r'api/images/([^"\'>\\]+)', src)
+    if m_api:
+        filename = m_api.group(1)
+        return os.path.normpath(os.path.join(os.getcwd(), IMAGES_FOLDER, filename))
+
+    if src.startswith('/'):
+        # Special-case our API route handled above; otherwise treat as web-root path
+        return os.path.normpath(os.path.join(os.getcwd(), src.lstrip('/')))
+    # relative path - resolve against base_dir if provided
+    base = base_dir or os.getcwd()
+    return os.path.normpath(os.path.join(base, src))
+
+
+def _download_remote_images_in_html(html, upload_folder='static/uploads'):
+    """Find <img src="http(s)..."> in HTML, download them into `upload_folder`
+    and replace src with a relative path `../static/uploads/<file>` so the
+    saved HTML references the local copy.
+    """
+    try:
+        from bs4 import BeautifulSoup
+        import urllib.request, mimetypes, imghdr
+        import uuid
+    except Exception:
+        return html
+
+    soup = BeautifulSoup(html, 'lxml')
+    os.makedirs(upload_folder, exist_ok=True)
+    changed = False
+    for img in soup.find_all('img'):
+        src = img.get('src', '').strip()
+        if not src:
+            continue
+        if src.startswith('http://') or src.startswith('https://'):
+            try:
+                with urllib.request.urlopen(src) as resp:
+                    data = resp.read()
+                    info = resp.info()
+                    ctype = info.get_content_type() if hasattr(info, 'get_content_type') else None
+
+                ext = None
+                if ctype:
+                    ext = mimetypes.guess_extension(ctype)
+                if not ext:
+                    try:
+                        t = imghdr.what(None, h=data)
+                        if t:
+                            ext = '.' + t
+                    except Exception:
+                        ext = '.bin'
+
+                fname = f"{uuid.uuid4().hex}{ext or '.bin'}"
+                fpath = os.path.join(upload_folder, fname)
+                with open(fpath, 'wb') as fh:
+                    fh.write(data)
+                img['src'] = f"../{upload_folder}/{fname}"
+                changed = True
+                print(f"Downloaded remote image {src} -> {fpath}")
+            except Exception as e:
+                print(f"Failed to download embedded remote image {src}: {e}")
+                continue
+
+    return str(soup)
+
+
+def _ensure_file_view_script(html):
+    """Inject a small fallback script into saved HTML so that when the
+    file is opened via file:// the images with `data-local-src` are used.
+
+    The function is idempotent: it won't inject the script more than once.
+    """
+    try:
+        if 'data-local-src' not in html:
+            return html
+        marker = '<!-- FILE_VIEW_FALLBACK_SCRIPT -->'
+        if marker in html:
+            return html
+        script = (
+            "\n<!-- FILE_VIEW_FALLBACK_SCRIPT -->\n"
+            "<script>\n"
+            "(function(){\n"
+            "  try{\n"
+            "    if (location.protocol === 'file:'){\n"
+            "      Array.prototype.forEach.call(document.querySelectorAll('img[data-local-src]'), function(img){\n"
+            "        var local = img.getAttribute('data-local-src'); if(local) img.src = local; });\n"
+            "    }\n"
+            "  }catch(e){}\n"
+            "})();\n"
+            "</script>\n"
+        )
+        import re
+        # Insert before </body> if present (case-insensitive), otherwise append.
+        if re.search(r'</body>', html, flags=re.IGNORECASE):
+            html = re.sub(r'</body>', script + '</body>', html, flags=re.IGNORECASE)
+        else:
+            html = html + script
+        return html
+    except Exception:
+        return html
+
+
+def html_to_docx(html, out_path, base_dir=None):
     """Convert HTML to DOCX preserving highlights and formatting"""
     from bs4 import BeautifulSoup
     from docx import Document
@@ -329,7 +559,7 @@ def html_to_docx(html, out_path):
                 # Also set precise shading (w:shd) so Word displays exact background
                 _set_docx_run_shading(run, hex_color)
 
-    def process_text_node(node, parent_paragraph):
+    def process_text_node(node, parent_paragraph, base_dir=None):
         """Process text nodes preserving formatting"""
         if not node:
             return
@@ -352,11 +582,13 @@ def html_to_docx(html, out_path):
         # Procesar imágenes embebidas
         if node.name == 'img':
             src = node.get('src', '')
+            print(f"DOCX: encountered <img> with src='{src}'")
             if src:
-                # Convertir ruta de URL estática a ruta de archivo local
-                file_path = src.lstrip('/')
-                if not os.path.isabs(file_path):
-                    file_path = os.path.join(os.getcwd(), file_path)
+                file_path = _resolve_image_src_to_path(src, base_dir=base_dir)
+                print(f"DOCX: resolved image path: {file_path}")
+                if file_path is None:
+                    print(f"Skipping remote image for DOCX: {src}")
+                    return
                 try:
                     # Intentar insertar la imagen en el párrafo (inline)
                     try:
@@ -364,6 +596,7 @@ def html_to_docx(html, out_path):
                         run.add_picture(file_path)
                     except Exception:
                         # Fallback: añadir imagen como párrafo independiente
+                        print(f"DOCX: fallback add_picture for {file_path}")
                         doc.add_picture(file_path)
                 except Exception as e:
                     print(f"Failed to add image to DOCX from {file_path}: {e}")
@@ -425,9 +658,10 @@ def html_to_docx(html, out_path):
         if node.name == 'img':
             src = node.get('src', '')
             if src:
-                file_path = src.lstrip('/')
-                if not os.path.isabs(file_path):
-                    file_path = os.path.join(os.getcwd(), file_path)
+                file_path = _resolve_image_src_to_path(src, base_dir=base_dir)
+                if file_path is None:
+                    print(f"Skipping remote nested image for DOCX: {src}")
+                    return
                 try:
                     try:
                         run = parent_paragraph.add_run()
@@ -440,7 +674,7 @@ def html_to_docx(html, out_path):
             
         # Procesar otros elementos de forma recursiva
         for child in node.children:
-            process_text_node(child, parent_paragraph)
+            process_text_node(child, parent_paragraph, base_dir=base_dir)
 
     # Procesar bloques de texto
     for el in soup.find_all(['h1', 'h2', 'h3', 'p', 'li', 'div']):
@@ -451,14 +685,14 @@ def html_to_docx(html, out_path):
             if node.name == 'br':
                 p.add_run('\n')
             else:
-                process_text_node(node, p)
+                process_text_node(node, p, base_dir=base_dir)
         
         # Nota: no añadimos un párrafo vacío extra aquí; cada elemento bloque
         # ya creó su propio párrafo `p` (evita líneas en blanco adicionales).
             
     # Save the document
     doc.save(out_path)
-def html_to_odt(html, out_path):
+def html_to_odt(html, out_path, base_dir=None):
     """Convert HTML to ODT preserving highlights and formatting"""
     from bs4 import BeautifulSoup
     from odf.opendocument import OpenDocumentText
@@ -552,7 +786,7 @@ def html_to_odt(html, out_path):
             return formats[0].title()
         return None
 
-    def process_text_node(node, parent_paragraph):
+    def process_text_node(node, parent_paragraph, base_dir=None):
         """Process text nodes preserving formatting"""
         if not node:
             return
@@ -567,10 +801,13 @@ def html_to_odt(html, out_path):
         # Procesar imágenes embebidas en ODT
         if node.name == 'img':
             src = node.get('src', '')
+            print(f"ODT: encountered <img> with src='{src}'")
             if src:
-                file_path = src.lstrip('/')
-                if not os.path.isabs(file_path):
-                    file_path = os.path.join(os.getcwd(), file_path)
+                file_path = _resolve_image_src_to_path(src, base_dir=base_dir)
+                print(f"ODT: resolved image path: {file_path}")
+                if file_path is None:
+                    print(f"Skipping remote image for ODT: {src}")
+                    return
                 try:
                     from odf.draw import Frame, Image
                     import mimetypes
@@ -621,7 +858,7 @@ def html_to_odt(html, out_path):
             
         # Para otros elementos inline, procesar su contenido
         for child in node.children:
-            process_text_node(child, parent_paragraph)
+            process_text_node(child, parent_paragraph, base_dir=base_dir)
 
     # Procesar bloques de texto
     for el in soup.find_all(['h1', 'h2', 'h3', 'p', 'li', 'div']):
@@ -632,7 +869,7 @@ def html_to_odt(html, out_path):
             if node.name == 'br':
                 p.addText('\n')
             else:
-                process_text_node(node, p)
+                process_text_node(node, p, base_dir=base_dir)
 
         # Añadir párrafo al documento
         doc.text.addElement(p)
@@ -688,6 +925,26 @@ def edit(filename):
     filepath = os.path.join(UPLOAD_FOLDER, filename)
     with open(filepath, 'r') as f:
         content = f.read()
+    # Fix any absolute/static-root image paths saved previously so the
+    # editor shows images correctly even when the HTML file is opened
+    # directly (file://) or when served by Flask. Convert:
+    #  - "/static/uploads/..." -> "../static/uploads/..."
+    #  - "file:///C:/.../static/uploads/..." -> "../static/uploads/..."
+    try:
+        import re
+        # replace leading /static/uploads/ occurrences
+        content = re.sub(r'src=["\']?/static/uploads/', 'src="../static/uploads/', content)
+        # replace file:// style absolute paths that include static/uploads
+        content = re.sub(r'src=["\']?file://[^"\']*?/static/uploads/', 'src="../static/uploads/', content)
+    except Exception:
+        pass
+
+    # Also convert local upload references to API URLs so the editor loads them
+    try:
+        content = _convert_local_srcs_to_api(content)
+    except Exception:
+        pass
+
     return render_template('form.html', content=content, filename=filename)
 
 @app.route('/generate', methods=['POST'])
@@ -713,7 +970,17 @@ def generate():
     # them to the static uploads folder, replacing the <img> src attributes
     # with the corresponding `/static/uploads/...` paths.
     try:
+        # Only extract inline data: images pasted from the editor. We no
+        # longer download remote http(s) images into the saved HTML; remote
+        # image URLs remain external. Converters that need to embed remote
+        # images will download them on-demand during conversion via
+        # `_resolve_image_src_to_path`.
         content = _extract_and_save_inline_images(content)
+        # Ensure any local references to uploads are rewritten to the API
+        content = _convert_local_srcs_to_api(content)
+        # Inject a small fallback script so static HTML opened via file://
+        # will swap `src` to `data-local-src` and display images locally.
+        content = _ensure_file_view_script(content)
     except Exception as e:
         print(f"Warning: failed to extract inline images: {e}")
 
@@ -726,8 +993,34 @@ def generate():
     try:
         with open(html_path, 'r', encoding='utf-8') as fh:
             html = fh.read()
+        # Prepare a copy of the HTML for conversion where we remove any
+        # injected file:// fallback scripts. Those scripts are useful for
+        # static viewing but must not be embedded as text in DOCX/ODT.
         try:
-            html_to_docx(html, docx_path)
+            try:
+                from bs4 import BeautifulSoup
+                soup_for_conv = BeautifulSoup(html, 'lxml')
+            except Exception:
+                from bs4 import BeautifulSoup
+                soup_for_conv = BeautifulSoup(html, 'html.parser')
+
+            # Remove script tags that implement the file:// fallback
+            removed = False
+            for script in list(soup_for_conv.find_all('script')):
+                content = script.string or ''
+                if 'location.protocol' in content or 'FILE_VIEW_FALLBACK_SCRIPT' in str(script.previous_sibling):
+                    script.decompose()
+                    removed = True
+
+            if removed:
+                print('Removed file-view fallback script from HTML before DOCX conversion')
+
+            html_for_docx = str(soup_for_conv)
+        except Exception:
+            html_for_docx = html
+
+        try:
+            html_to_docx(html_for_docx, docx_path, base_dir=os.path.dirname(html_path))
             messages.append('DOCX generado (preservando highlights)')
         except Exception as e:
             messages.append('No se pudo generar DOCX: ' + str(e))
@@ -738,8 +1031,30 @@ def generate():
     try:
         with open(html_path, 'r', encoding='utf-8') as fh:
             html = fh.read()
+        # Remove the fallback script before ODT conversion as well
         try:
-            html_to_odt(html, odt_path)
+            try:
+                from bs4 import BeautifulSoup
+                soup_for_conv = BeautifulSoup(html, 'lxml')
+            except Exception:
+                from bs4 import BeautifulSoup
+                soup_for_conv = BeautifulSoup(html, 'html.parser')
+
+            removed = False
+            for script in list(soup_for_conv.find_all('script')):
+                content = script.string or ''
+                if 'location.protocol' in content or 'FILE_VIEW_FALLBACK_SCRIPT' in str(script.previous_sibling):
+                    script.decompose()
+                    removed = True
+            if removed:
+                print('Removed file-view fallback script from HTML before ODT conversion')
+
+            html_for_odt = str(soup_for_conv)
+        except Exception:
+            html_for_odt = html
+
+        try:
+            html_to_odt(html_for_odt, odt_path, base_dir=os.path.dirname(html_path))
             messages.append('ODT generado (preservando highlights)')
         except Exception as e:
             messages.append('No se pudo generar ODT: ' + str(e))
@@ -807,12 +1122,12 @@ def download(filename):
             if ext == 'docx':
                 with open(html_path, 'r', encoding='utf-8') as fh:
                     html = fh.read()
-                html_to_docx(html, target_path)
+                html_to_docx(html, target_path, base_dir=os.path.dirname(html_path))
 
             elif ext == 'odt':
                 with open(html_path, 'r', encoding='utf-8') as fh:
                     html = fh.read()
-                html_to_odt(html, target_path)
+                html_to_odt(html, target_path, base_dir=os.path.dirname(html_path))
 
             elif ext == 'pdf':
                 import fitz
@@ -852,7 +1167,12 @@ def download(filename):
     if not os.path.exists(target_path):
         return "Archivo no encontrado", 404
 
-    return send_file(target_path, as_attachment=True)
+    # Serve HTML inline so the browser renders it and image URLs (/api/images/...) work
+    # For other formats (docx/odt/pdf) keep attachment behavior.
+    if ext == 'html':
+        return send_file(target_path)
+    else:
+        return send_file(target_path, as_attachment=True)
 
 if __name__ == '__main__':
     app.run(debug=True)

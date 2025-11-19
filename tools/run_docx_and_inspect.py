@@ -17,7 +17,7 @@ with open(html_path, 'r', encoding='utf-8') as f:
     html = f.read()
 
 print('Generating', out_path)
-html_to_docx(html, out_path)
+html_to_docx(html, out_path, base_dir=os.path.dirname(html_path))
 print('Saved. Inspecting docx xml for shading elements...')
 
 with ZipFile(out_path, 'r') as z:

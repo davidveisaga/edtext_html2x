@@ -1,0 +1,18 @@
+<html><body><p>quindo docuemto con imagentes embebidas.</p>
+<p><img alt="" data-local-src="../static/uploads/74f6993796814cdba25edd8d083a06b4.jpg" height="141" src="/api/images/74f6993796814cdba25edd8d083a06b4.jpg" width="82"/></p>
+<p><img data-local-src="../static/uploads/4599b2787c1049a9aa618191a02ae5f3.png" src="/api/images/4599b2787c1049a9aa618191a02ae5f3.png"/></p>
+<p>la primera <span style="background-color: rgb(191, 237, 210);">embebida</span>, la segunda pegada.</p>
+<p></p>
+<p></p>
+<!-- FILE_VIEW_FALLBACK_SCRIPT -->
+<script>
+(function(){
+  try{
+    if (location.protocol === 'file:'){
+      Array.prototype.forEach.call(document.querySelectorAll('img[data-local-src]'), function(img){
+        var local = img.getAttribute('data-local-src'); if(local) img.src = local; });
+    }
+  }catch(e){}
+})();
+</script>
+</body></html>

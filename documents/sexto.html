@@ -1,0 +1,16 @@
+<html><body><p>sexto archivo </p>
+<p><img data-local-src="../static/uploads/b3e71997e5384a1088bb9f60e0f03c59.png" src="/api/images/b3e71997e5384a1088bb9f60e0f03c59.png"/></p>
+<p><img alt="" data-local-src="../static/uploads/a32fd45603744579b3baa321a1ba3459.jpg" height="149" src="/api/images/a32fd45603744579b3baa321a1ba3459.jpg" width="104"/></p>
+<p>uno pasteado el otro embebido</p>
+<!-- FILE_VIEW_FALLBACK_SCRIPT -->
+<script>
+(function(){
+  try{
+    if (location.protocol === 'file:'){
+      Array.prototype.forEach.call(document.querySelectorAll('img[data-local-src]'), function(img){
+        var local = img.getAttribute('data-local-src'); if(local) img.src = local; });
+    }
+  }catch(e){}
+})();
+</script>
+</body></html>
