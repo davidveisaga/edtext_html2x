@@ -590,10 +590,19 @@ def html_to_docx(html, out_path, base_dir=None):
     from bs4 import BeautifulSoup
     from docx import Document
     from docx.enum.text import WD_COLOR_INDEX
-    from docx.shared import Pt, RGBColor
+    from docx.shared import Pt, RGBColor, Cm
 
     soup = BeautifulSoup(html, 'lxml')
     doc = Document()
+    # Reduce default margins (python-docx default is ~2.54cm / 1in).
+    try:
+        section = doc.sections[0]
+        section.left_margin = Cm(2)
+        section.right_margin = Cm(2)
+        section.top_margin = Cm(2)
+        section.bottom_margin = Cm(2)
+    except Exception as e:
+        print(f"Could not set DOCX margins: {e}")
 
     def apply_text_formatting(run, node):
         """Apply text formatting (bold, italic, etc) to a run"""
