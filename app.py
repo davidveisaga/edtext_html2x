@@ -480,6 +480,75 @@ def _download_remote_images_in_html(html, upload_folder='static/uploads'):
     return str(soup)
 
 
+def _get_image_size(path):
+    """Return (width, height) in pixels for common image types.
+
+    Tries Pillow first, then falls back to simple header parsing for PNG, JPEG and GIF.
+    Returns (None, None) if dimensions cannot be determined.
+    """
+    try:
+        from PIL import Image
+        with Image.open(path) as im:
+            return im.width, im.height
+    except Exception:
+        pass
+
+    try:
+        with open(path, 'rb') as fh:
+            data = fh.read(64*1024)
+        # PNG
+        if data[:8] == b'\x89PNG\r\n\x1a\n':
+            import struct
+            # IHDR chunk at offset 8..25, width at 16..19, height at 20..23
+            width = struct.unpack('>I', data[16:20])[0]
+            height = struct.unpack('>I', data[20:24])[0]
+            return width, height
+        # JPEG - parse markers to find SOF0/2
+        if data[:2] == b'\xff\xd8':
+            import io, struct
+            f = io.BytesIO(data)
+            f.read(2)
+            while True:
+                marker_bytes = f.read(2)
+                if len(marker_bytes) < 2:
+                    break
+                marker, = struct.unpack('>H', marker_bytes)
+                # Skip padding
+                while marker == 0xFFFF:
+                    marker, = struct.unpack('>H', f.read(2))
+                # SOF markers range
+                if 0xFFC0 <= marker <= 0xFFC3 or 0xFFC5 <= marker <= 0xFFC7 or 0xFFC9 <= marker <= 0xFFCB or 0xFFCD <= marker <= 0xFFCF:
+                    length_bytes = f.read(2)
+                    if len(length_bytes) < 2:
+                        break
+                    length = struct.unpack('>H', length_bytes)[0]
+                    precision = f.read(1)
+                    h_bytes = f.read(2)
+                    w_bytes = f.read(2)
+                    if len(h_bytes) == 2 and len(w_bytes) == 2:
+                        height = struct.unpack('>H', h_bytes)[0]
+                        width = struct.unpack('>H', w_bytes)[0]
+                        return width, height
+                    break
+                else:
+                    # skip this segment
+                    length_bytes = f.read(2)
+                    if len(length_bytes) < 2:
+                        break
+                    length = struct.unpack('>H', length_bytes)[0]
+                    f.read(length-2)
+        # GIF
+        if data[:6] in (b'GIF87a', b'GIF89a'):
+            import struct
+            width = struct.unpack('<H', data[6:8])[0]
+            height = struct.unpack('<H', data[8:10])[0]
+            return width, height
+    except Exception:
+        pass
+
+    return None, None
+
+
 def _ensure_file_view_script(html):
     """Inject a small fallback script into saved HTML so that when the
     file is opened via file:// the images with `data-local-src` are used.
@@ -827,7 +896,23 @@ def html_to_odt(html, out_path, base_dir=None):
                         except Exception as e2:
                             print(f"addPictureFromFile also failed: {e2}")
                             href = file_path
-                    frame = Frame(width="6cm", height="4cm")
+
+                    # Determine image pixel size to preserve aspect ratio
+                    w_px, h_px = _get_image_size(file_path)
+                    if w_px and h_px:
+                        # assume 96 dpi for conversion to cm
+                        dpi = 96.0
+                        width_cm = (w_px / dpi) * 2.54
+                        height_cm = (h_px / dpi) * 2.54
+                        max_width_cm = 15.0
+                        if width_cm > max_width_cm:
+                            scale = max_width_cm / width_cm
+                            width_cm *= scale
+                            height_cm *= scale
+                        frame = Frame(width=f"{width_cm:.2f}cm", height=f"{height_cm:.2f}cm")
+                    else:
+                        frame = Frame(width="6cm", height="4cm")
+
                     image = Image(href=href)
                     frame.addElement(image)
                     parent_paragraph.addElement(frame)
